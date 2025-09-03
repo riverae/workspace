@@ -6,11 +6,11 @@ import os
 from os import listdir
 from os import path
 import argparse
+import configparser
 
 LOCAL_FOLDER_PATH = '/workspace/projects'
 local_project_files = listdir(LOCAL_FOLDER_PATH)
-APP_KEY = 'vm62c8tizuiqmer'
-APP_SECRET = '6gha4cjy20tq8vt'
+config_file = '/workspace/scripts/config.txt'
 token_file = '/workspace/scripts/token_dropbox.txt'
 
 def connect():
@@ -20,6 +20,10 @@ def connect():
         print('Authenticated')
     except Exception as e:
         print('Error connecting to Dropbox with access token: ' + str(e))
+        config = configparser.ConfigParser()
+        config.read(config_file)
+        APP_KEY = config['LOGIN']['app_key']
+        APP_SECRET = config['LOGIN']['app_secret']
         auth_flow = DropboxOAuth2FlowNoRedirect(APP_KEY, APP_SECRET)
         authorize_url = auth_flow.start()
 
@@ -41,7 +45,7 @@ def connect():
 def list_files():
     dbx = connect()
     try:
-        files = dbx.files_list_folder('').entries
+        files = dbx.files_list_folder('/RunPod_Project_Download').entries
         files_list = []
 
         for file in files:
