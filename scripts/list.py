@@ -6,11 +6,9 @@ import os
 from os import listdir
 from os import path
 import argparse
-import configparser
 
 LOCAL_FOLDER_PATH = '/workspace/projects'
 local_project_files = listdir(LOCAL_FOLDER_PATH)
-config_file = '/workspace/scripts/config.txt'
 token_file = '/workspace/scripts/token_dropbox.txt'
 
 def connect():
@@ -20,10 +18,8 @@ def connect():
         print('Authenticated')
     except Exception as e:
         print('Error connecting to Dropbox with access token: ' + str(e))
-        config = configparser.ConfigParser()
-        config.read(config_file)
-        APP_KEY = config['LOGIN']['app_key']
-        APP_SECRET = config['LOGIN']['app_secret']
+        APP_KEY = os.environ.get('APP_KEY')
+        APP_SECRET = os.environ.get('APP_SECRET')
         auth_flow = DropboxOAuth2FlowNoRedirect(APP_KEY, APP_SECRET)
         authorize_url = auth_flow.start()
 
@@ -95,5 +91,4 @@ if __name__ == '__main__':
     else:
         dbx, df = list_files()
         print(df)
-        #print(local_project_files)
 
