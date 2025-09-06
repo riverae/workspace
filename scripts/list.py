@@ -114,7 +114,7 @@ def list_files():
                 }
                 files_list.append(metadata)
         df = pd.DataFrame.from_records(files_list)
-        return df.sort_values(by="size", ascending=False)
+        return dbx, df.sort_values(by="size", ascending=False)
     except Exception as e:
         raise Exception("Error listing files") from e
 
@@ -125,7 +125,7 @@ def download_file_by_index(index):
     file_path = df.loc[index, 'path_display']
 
     if file_name not in local_project_files:
-        result = dbx.files_download(file_path)
+        _, result = dbx.files_download(file_path)
         with open(os.path.join(LOCAL_FOLDER_PATH, file_name), 'wb') as file:
             file.write(result.content)
         print(f"Downloaded {file_name} to {LOCAL_FOLDER_PATH}")
@@ -137,8 +137,7 @@ if __name__ == '__main__':
 
     if "index" in args:
         download_file_by_index(index=int(args.index))
-        pass
     else:
-        df = list_files()
+        _, df = list_files()
         print(df)        
         
