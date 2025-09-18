@@ -1,0 +1,1 @@
+/opt/blender_4.5/blender -b --python-expr 'import bpy; bpy.ops.preferences.addon_install(overwrite=True, filepath="/workspace/scripts/addons/easystates_1.0.7.3_stable.zip"); bpy.ops.preferences.addon_enable(module="easystates"); bpy.ops.wm.save_userpref()'
