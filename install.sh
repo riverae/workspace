@@ -1,6 +1,7 @@
 apt update
 apt install nano -y
 apt install xorg -y
+apt install zip -y
 pip install configparser
 pip install dropbox
 pip install pandas
