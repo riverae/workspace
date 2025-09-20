@@ -4,6 +4,7 @@ apt install xorg -y
 pip install configparser
 pip install dropbox
 pip install pandas
+pip install tqdm
 bash /workspace/scripts/blender_install.sh
 bash /workspace/scripts/addons_install.sh
 cat /workspace/scripts/motionhive.txt
