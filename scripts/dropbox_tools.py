@@ -4,12 +4,16 @@ from os import listdir
 import argparse
 
 from dropbox import DropboxOAuth2FlowNoRedirect
-from dropbox.exceptions import AuthError
+from dropbox.exceptions import AuthError, ApiError
+from dropbox.files import CommitInfo, WriteMode, UploadSessionCursor
 import dropbox
+from tqdm import tqdm
 
 LOCAL_FOLDER_PATH = '/workspace/projects'
+LOCAL_RENDERED_FOLDER_PATH = '/workspace/projects'
 local_project_files = listdir(LOCAL_FOLDER_PATH)
-DROPBOX_FOLDER_PATH = '/RunPod_Project_Download'
+DROPBOX_DOWNLOAD_FOLDER_PATH = '/RunPod_Project_Download'
+DROPBOX_UPLOAD_FOLDER_PATH = '/RunPod_Project_Upload'
 TOKEN_FILE = '/workspace/scripts/token_dropbox.txt'
 
 def get_access_token():
@@ -102,7 +106,7 @@ def list_files():
     files_list = []
 
     try:
-        files = dbx.files_list_folder(DROPBOX_FOLDER_PATH).entries
+        files = dbx.files_list_folder(DROPBOX_DOWNLOAD_FOLDER_PATH).entries
         for file in files:
             if isinstance(file, dropbox.files.FileMetadata):
                 metadata = {
@@ -130,13 +134,55 @@ def download_file_by_index(index):
             file.write(result.content)
         print(f"Downloaded {file_name} to {LOCAL_FOLDER_PATH}")
 
+def upload_file_by_path(filename):
+    chunk_size = 16 * 1024 * 1024
+    dbx = connect_to_dropbox()
+    file_path = os.path.join(LOCAL_FOLDER_PATH, filename)
+    file_size = os.path.getsize(file_path)
+    target_path = os.path.join(DROPBOX_UPLOAD_FOLDER_PATH, filename)
+    session_start_result = None
+    print(f"Starting upload session for '{file_path}'...")
+    
+    try:
+        with open(file_path, 'rb') as file:
+            with tqdm(total=file_size, unit='B', unit_scale=True, unit_divisor=1024, desc='Uploading', position=0, leave=True) as progress_bar:
+                chunk = file.read(chunk_size)
+                session_start_result = dbx.files_upload_session_start(chunk)                
+                progress_bar.update(chunk_size)
+                cursor = dropbox.files.UploadSessionCursor(
+                    session_id=session_start_result.session_id,
+                    offset=file.tell()
+                )
+
+                while file.tell() < file_size:
+                    if (file_size - file.tell()) <= chunk_size:
+                        commit = dropbox.files.CommitInfo(path=target_path)                        
+                        dbx.files_upload_session_finish(file.read(), cursor, commit)
+                    else:
+                        chunk = file.read(chunk_size)
+                        dbx.files_upload_session_append_v2(chunk, cursor)
+                        cursor.offset = file.tell()
+                    progress_bar.update(chunk_size)
+        print(f"Upload complete.")
+
+    except dropbox.exceptions.ApiError as e:
+        print(f"Error starting upload session: {e}")
+    except FileNotFoundError:
+        print(f"File '{file_path}' not found.")
+    except Exception as e:
+        print(f"An unexpected error occurred: {e}")
+
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument("--index", default=argparse.SUPPRESS)
+    parser.add_argument("--filename", default=argparse.SUPPRESS, type=str)
     args = parser.parse_args()
 
     if "index" in args:
         download_file_by_index(index=int(args.index))
+    elif "filename" in args:
+        upload_file_by_path(args.filename)
     else:
         _, df = list_files()
         print(df)        
