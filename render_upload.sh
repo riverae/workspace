@@ -8,5 +8,5 @@ if [ -z "$1" ]; then
 else
   #zip -0 -r $PROJ_DIR/$1.zip $RENDER_DIR/$1
   7z a -mx0 -bt $PROJ_DIR/$1.7z $RENDER_DIR/$1
-  python /workspace/scripts/dropbox_tools.py --filename $1.zip
+  python /workspace/scripts/dropbox_tools.py --filename $1.7z
 fi
