@@ -14,6 +14,7 @@ from dropbox.files import CommitInfo, WriteMode, UploadSessionCursor
 import dropbox
 from tqdm import tqdm
 
+RUNPOD_POD_ID = None
 LOCAL_FOLDER_PATH = '/workspace/projects'
 LOCAL_RENDERED_FOLDER_PATH = '/workspace/projects'
 local_project_files = listdir(LOCAL_FOLDER_PATH)
@@ -21,8 +22,8 @@ DROPBOX_DOWNLOAD_FOLDER_PATH = '/RunPod_Project_Download'
 DROPBOX_UPLOAD_FOLDER_PATH = '/RunPod_Project_Upload'
 TOKEN_FILE = '/workspace/scripts/token_dropbox.txt'
 DOWNLOAD_CHUNK_SIZE = 128 * 1024 * 1024
-UPLOAD_CHUNK_SIZE = 4 * 1024 * 1024
-CONCURRENCY_LIMIT = 10
+UPLOAD_CHUNK_SIZE = 128 * 1024 * 1024
+CONCURRENCY_LIMIT = 16
 
 def get_access_token():
     try:
@@ -163,7 +164,7 @@ async def download_file_chunked(index):
 
             num_chunks = (file_size + DOWNLOAD_CHUNK_SIZE - 1) // DOWNLOAD_CHUNK_SIZE
             tasks = []
-            semaphore = asyncio.Semaphore(16)  # Limit concurrent tasks
+            semaphore = asyncio.Semaphore(CONCURRENCY_LIMIT)  # Limit concurrent tasks
 
             async with aiohttp.ClientSession() as session:
                 for i in range(num_chunks):
@@ -293,10 +294,17 @@ async def upload_file_chunked(filename):
 
 
 async def main():
+    RUNPOD_POD_ID = os.environ.get('RUNPOD_POD_ID')
     parser = argparse.ArgumentParser()
     parser.add_argument("--index", default=argparse.SUPPRESS)
     parser.add_argument("--filename", default=argparse.SUPPRESS, type=str)
     args = parser.parse_args()
+
+    if not RUNPOD_POD_ID:
+        DOWNLOAD_CHUNK_SIZE = 64 * 1024 * 1024
+        UPLOAD_CHUNK_SIZE = 4 * 1024 * 1024
+        CONCURRENCY_LIMIT = 8        
+        print("RUNPOD_POD environment not detected.")        
 
     if "index" in args:
         await download_file_chunked(index=int(args.index))

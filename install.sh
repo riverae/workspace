@@ -2,6 +2,7 @@ apt update
 apt install nano -y
 apt install xorg -y
 apt install zip -y
+apt install p7zip-full
 pip install asyncio
 pip install aiohttp
 pip install configparser
