@@ -3,6 +3,8 @@ apt install nano -y
 apt install xorg -y
 apt install zip -y
 apt install p7zip-full
+curl -s https://packagecloud.io/install/repositories/ookla/speedtest-cli/script.deb.sh | bash
+apt install speedtest
 pip install asyncio
 pip install aiohttp
 pip install configparser
