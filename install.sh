@@ -2,9 +2,11 @@ apt update
 apt install nano -y
 apt install xorg -y
 apt install zip -y
-apt install p7zip-full
+apt install p7zip-full -y
+apt install ffmpeg -y
+apt install exiftool -y
 curl -s https://packagecloud.io/install/repositories/ookla/speedtest-cli/script.deb.sh | bash
-apt install speedtest
+apt install speedtest -y
 pip install asyncio
 pip install aiohttp
 pip install configparser
