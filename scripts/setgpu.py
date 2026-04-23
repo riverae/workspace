@@ -1,5 +1,37 @@
 import bpy
 import sys
+import os
+
+# Set this to wherever you place the botaniq_full folder on Linux.
+# Leave as empty string to skip remapping.
+BOTANIQ_LINUX_ROOT = "/workspace/assets/botaniq_full"
+
+# Old Windows-side root as it appears in the blend file's library paths.
+BOTANIQ_WIN_ROOT = "/c/Users/Bryan/polygoniq_asset_packs/botaniq_full"
+
+
+def remap_missing_libraries():
+    """Redirect broken Windows library paths to the Linux asset location."""
+    if not BOTANIQ_LINUX_ROOT:
+        return
+    remapped = 0
+    for lib in bpy.data.libraries:
+        # Normalise the stored path (may be relative '//' or absolute)
+        abs_path = bpy.path.abspath(lib.filepath)
+        if BOTANIQ_WIN_ROOT in abs_path:
+            new_path = abs_path.replace(BOTANIQ_WIN_ROOT, BOTANIQ_LINUX_ROOT)
+            if os.path.exists(new_path):
+                lib.filepath = new_path
+                lib.reload()
+                remapped += 1
+                print(f"  Remapped: {abs_path} -> {new_path}")
+            else:
+                print(f"  WARNING: remap target missing on disk: {new_path}")
+    if remapped:
+        print(f"Library remap complete: {remapped} libraries redirected.")
+    else:
+        print("Library remap: no matching libraries found (or BOTANIQ_LINUX_ROOT not set).")
+
 
 def setup_gpu_rendering():
     """Enable GPU rendering: prefer OPTIX, fallback to CUDA"""
@@ -87,6 +119,9 @@ def setup_oidn_denoising():
 def setup_gpu_and_denoiser():
     """Main entry: configure GPU & enforce OIDN denoising if enabled"""
     scene = bpy.context.scene
+
+    print("Remapping missing library paths...")
+    remap_missing_libraries()
 
     if scene.render.engine != 'CYCLES':
         print("Cycles not active, skipping setup.")
