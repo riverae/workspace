@@ -126,6 +126,22 @@ def setup_gpu_and_denoiser():
         if d.use:
             print(f"  - {d.name} ({d.type})")
 
+    print("=== Scene Diagnostics ===")
+    print(f"Scene: {scene.name}")
+    print(f"Resolution: {scene.render.resolution_x}x{scene.render.resolution_y} @ {scene.render.resolution_percentage}%")
+    print(f"Output path: {scene.render.filepath}")
+    print(f"Output format: {scene.render.image_settings.file_format}")
+    print(f"Frame range: {scene.frame_start}-{scene.frame_end}, current: {scene.frame_current}")
+    print(f"Camera: {scene.camera.name if scene.camera else 'NONE - NO ACTIVE CAMERA!'}")
+    vl = bpy.context.view_layer
+    print(f"Active view layer: {vl.name}")
+    print(f"View layer use: {vl.use}")
+    nodes = get_compositor_nodes(scene)
+    file_output_nodes = [n.name for n in nodes if n.type == 'OUTPUT_FILE']
+    denoise_nodes = [n.name for n in nodes if n.type == 'DENOISE']
+    print(f"Compositor File Output nodes: {file_output_nodes if file_output_nodes else 'none'}")
+    print(f"Compositor Denoise nodes: {denoise_nodes if denoise_nodes else 'none'}")
+
 
 if __name__ == '__main__':
     try:
