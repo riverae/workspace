@@ -20,6 +20,19 @@ def setup_gpu_rendering():
     return 'CUDA' if found else None
 
 
+def get_compositor_nodes(scene):
+    """Return compositor node list compatible with Blender 4.x and 5.x"""
+    # Blender 5.x: compositor moved to compositing_node_group
+    ng = getattr(scene, 'compositing_node_group', None)
+    if ng is not None:
+        return ng.nodes
+    # Blender 4.x fallback
+    node_tree = getattr(scene, 'node_tree', None)
+    if node_tree is not None:
+        return node_tree.nodes
+    return []
+
+
 def check_denoising_enabled():
     """Return True if any denoising is enabled in scene, view layer, or compositor"""
     scene = bpy.context.scene
@@ -28,9 +41,7 @@ def check_denoising_enabled():
         return True
     if hasattr(vl.cycles, 'use_denoising') and vl.cycles.use_denoising:
         return True
-    if scene.use_nodes and scene.node_tree:
-        return any(node.type == 'DENOISE' for node in scene.node_tree.nodes)
-    return False
+    return any(node.type == 'DENOISE' for node in get_compositor_nodes(scene))
 
 
 def setup_oidn_denoising():
@@ -42,7 +53,8 @@ def setup_oidn_denoising():
     # Scene-level denoising
     scene.cycles.use_denoising = True
     scene.cycles.denoiser = 'OPENIMAGEDENOISE'
-    scene.cycles.denoising_store_passes = True
+    if hasattr(scene.cycles, 'denoising_store_passes'):
+        scene.cycles.denoising_store_passes = True
     scene.cycles.denoising_prefilter = 'ACCURATE'
     scene.cycles.denoising_quality = 'HIGH'
     # Ensure normal & albedo passes
@@ -64,13 +76,12 @@ def setup_oidn_denoising():
         prefs.system.compositor_device = 'GPU'
 
     # Node-based compositor
-    if scene.use_nodes and scene.node_tree:
-        for node in scene.node_tree.nodes:
-            if node.type == 'DENOISE':
-                if hasattr(node, 'use_gpu'):
-                    node.use_gpu = True
-                if hasattr(node, 'use_hdr'):
-                    node.use_hdr = True
+    for node in get_compositor_nodes(scene):
+        if node.type == 'DENOISE':
+            if hasattr(node, 'use_gpu'):
+                node.use_gpu = True
+            if hasattr(node, 'use_hdr'):
+                node.use_hdr = True
 
 
 def setup_gpu_and_denoiser():
@@ -99,7 +110,9 @@ def setup_gpu_and_denoiser():
     # Optional tile size for GPU
     if hasattr(scene.cycles, 'use_auto_tile'):
         scene.cycles.use_auto_tile = False
+    if hasattr(scene.cycles, 'tile_x'):
         scene.cycles.tile_x = 256
+    if hasattr(scene.cycles, 'tile_y'):
         scene.cycles.tile_y = 256
 
     # Summary
