@@ -10,27 +10,47 @@ BOTANIQ_LINUX_ROOT = "/workspace/assets/botaniq_full"
 BOTANIQ_WIN_ROOT = "/c/Users/Bryan/polygoniq_asset_packs/botaniq_full"
 
 
+def _normalize_win_path(raw):
+    """Convert Windows-style path (backslashes, drive letter) to Unix style."""
+    p = raw.replace('\\', '/')
+    # C:/... -> /c/...
+    if len(p) >= 3 and p[1] == ':' and p[2] == '/':
+        p = '/' + p[0].lower() + p[2:]
+    return p
+
+
 def remap_missing_libraries():
     """Redirect broken Windows library paths to the Linux asset location."""
     if not BOTANIQ_LINUX_ROOT:
+        print("  BOTANIQ_LINUX_ROOT not set — skipping remap.")
         return
+
+    print(f"  Scanning {len(bpy.data.libraries)} linked libraries...")
     remapped = 0
+    missing_on_disk = 0
+
     for lib in bpy.data.libraries:
-        # Normalise the stored path (may be relative '//' or absolute)
-        abs_path = bpy.path.abspath(lib.filepath)
-        if BOTANIQ_WIN_ROOT in abs_path:
-            new_path = abs_path.replace(BOTANIQ_WIN_ROOT, BOTANIQ_LINUX_ROOT)
-            if os.path.exists(new_path):
-                lib.filepath = new_path
-                lib.reload()
-                remapped += 1
-                print(f"  Remapped: {abs_path} -> {new_path}")
-            else:
-                print(f"  WARNING: remap target missing on disk: {new_path}")
+        normed = _normalize_win_path(lib.filepath)
+
+        if BOTANIQ_WIN_ROOT not in normed:
+            continue
+
+        new_path = normed.replace(BOTANIQ_WIN_ROOT, BOTANIQ_LINUX_ROOT)
+        if os.path.exists(new_path):
+            lib.filepath = new_path
+            lib.reload()
+            remapped += 1
+            print(f"  Remapped: {new_path}")
+        else:
+            missing_on_disk += 1
+            print(f"  MISSING on disk: {new_path}")
+
     if remapped:
-        print(f"Library remap complete: {remapped} libraries redirected.")
+        print(f"Library remap complete: {remapped} remapped, {missing_on_disk} still missing.")
+    elif missing_on_disk:
+        print(f"Library remap: {missing_on_disk} paths matched but files not yet at {BOTANIQ_LINUX_ROOT}")
     else:
-        print("Library remap: no matching libraries found (or BOTANIQ_LINUX_ROOT not set).")
+        print(f"Library remap: no botaniq libraries found — check BOTANIQ_WIN_ROOT value.")
 
 
 def setup_gpu_rendering():
