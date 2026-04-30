@@ -54,22 +54,44 @@ def remap_missing_libraries():
 
 
 def setup_gpu_rendering():
-    """Enable GPU rendering: prefer OPTIX, fallback to CUDA"""
-    prefs = bpy.context.preferences.addons['cycles'].preferences
-    prefs.refresh_devices()
-    scene = bpy.context.scene
-    scene.render.engine = 'CYCLES'
-    scene.cycles.device = 'GPU'
+    """Validate and enforce GPU rendering based on blend file settings.
 
-    prefs.compute_device_type = 'CUDA'
-    found = False
-    for d in prefs.devices:
-        if d.type == 'CUDA':
-            d.use = True
-            found = True
-        else:
-            d.use = False
-    return 'CUDA' if found else None
+    Honors the blend's configured compute device, then falls back through
+    OPTIX → CUDA → CPU. Returns the device type string actually applied,
+    or None if the render engine is not Cycles.
+    """
+    prefs = bpy.context.preferences.addons['cycles'].preferences
+    scene = bpy.context.scene
+
+    if scene.render.engine != 'CYCLES':
+        print(f"  Render engine is {scene.render.engine}, not Cycles — skipping GPU setup.")
+        return None
+
+    if scene.cycles.device == 'CPU':
+        print("  Blend configured for CPU rendering — keeping CPU.")
+        return 'CPU'
+
+    # Build fallback chain: blend's choice first, then remaining GPU backends
+    requested = prefs.compute_device_type
+    chain = [requested]
+    for backend in ('OPTIX', 'CUDA'):
+        if backend not in chain:
+            chain.append(backend)
+
+    print(f"  Blend requests: {requested}. Fallback chain: {' → '.join(chain)} → CPU")
+
+    for device_type in chain:
+        prefs.compute_device_type = device_type
+        prefs.refresh_devices()
+        if any(d.type == device_type for d in prefs.devices):
+            for d in prefs.devices:
+                d.use = (d.type == device_type)
+            print(f"  GPU device set: {device_type}")
+            return device_type
+
+    print("  No GPU devices found — falling back to CPU.")
+    scene.cycles.device = 'CPU'
+    return 'CPU'
 
 
 def get_compositor_nodes(scene):
@@ -136,6 +158,29 @@ def setup_oidn_denoising():
                 node.use_hdr = True
 
 
+def check_and_fix_custom_camera(gpu_type):
+    """Detect Blender 5.x CUSTOM camera type and switch to CPU if needed.
+
+    Blender 5.x Lens Simulation cameras use shader-defined ray generation
+    (camera.type == 'CUSTOM').  CUDA cannot evaluate custom camera shaders —
+    it renders pure black.  OptiX supports it; CPU supports it via OSL.
+    When OptiX is unavailable, fall back to CPU so the render is correct.
+    Returns True if the device was switched to CPU.
+    """
+    scene = bpy.context.scene
+    cam_obj = scene.camera
+    if not cam_obj or cam_obj.data.type != 'CUSTOM':
+        return False
+    if gpu_type == 'OPTIX':
+        print("CUSTOM (LensSim) camera on OptiX — OK.")
+        return False
+    print(f"CUSTOM (LensSim) camera detected on {gpu_type}: "
+          "CUDA cannot render custom camera rays → switching to CPU.")
+    print("  Re-run on hardware with OptiX support for GPU rendering.")
+    scene.cycles.device = 'CPU'
+    return True
+
+
 def setup_gpu_and_denoiser():
     """Main entry: configure GPU & enforce OIDN denoising if enabled"""
     scene = bpy.context.scene
@@ -143,17 +188,15 @@ def setup_gpu_and_denoiser():
     print("Remapping missing library paths...")
     remap_missing_libraries()
 
-    if scene.render.engine != 'CYCLES':
-        print("Cycles not active, skipping setup.")
-        return
-
     print("Configuring GPU rendering...")
     gpu = setup_gpu_rendering()
-    if not gpu:
-        print("No GPU devices found, aborting.")
+    if gpu is None:
+        print("GPU setup skipped (non-Cycles engine).")
         return
 
     print(f"GPU setup complete: {gpu}")
+
+    check_and_fix_custom_camera(gpu)
 
     if not check_denoising_enabled():
         print("Denoising not enabled in file; skipping denoiser setup.")
@@ -196,6 +239,36 @@ def setup_gpu_and_denoiser():
     denoise_nodes = [n.name for n in nodes if n.type == 'DENOISE']
     print(f"Compositor File Output nodes: {file_output_nodes if file_output_nodes else 'none'}")
     print(f"Compositor Denoise nodes: {denoise_nodes if denoise_nodes else 'none'}")
+
+    # Camera deep-dive
+    cam_obj = scene.camera
+    if cam_obj:
+        cam = cam_obj.data
+        print("=== Camera Diagnostics ===")
+        print(f"  Type: {cam.type}")
+        print(f"  Lens: {cam.lens}mm, Sensor: {cam.sensor_width}x{cam.sensor_height}mm")
+        print(f"  Clip: {cam.clip_start} – {cam.clip_end}")
+        print(f"  DOF: {'on, f/' + str(round(cam.dof.aperture_fstop,1)) if cam.dof.use_dof else 'off'}")
+        loc = cam_obj.matrix_world.translation
+        print(f"  World location: ({loc.x:.2f}, {loc.y:.2f}, {loc.z:.2f})")
+        # Check for a glass plane / lens rig object near the camera
+        import mathutils
+        nearby = [o.name for o in bpy.data.objects
+                  if o.type == 'MESH'
+                  and (o.matrix_world.translation - loc).length < 2.0
+                  and o.name != cam_obj.name]
+        print(f"  Mesh objects within 2m of camera: {nearby if nearby else 'none'}")
+
+    # Light summary
+    lights = [o for o in bpy.data.objects if o.type == 'LIGHT']
+    print(f"Lights in scene: {len(lights)} → {[o.name for o in lights[:6]]}")
+    world = scene.world
+    print(f"World: {world.name if world else 'NONE'}, use_nodes={world.use_nodes if world else 'n/a'}")
+
+    # Bounce / clamp summary
+    lp = scene.cycles
+    print(f"Light paths: max={lp.max_bounces}, trans={lp.transmission_bounces}, "
+          f"clamp_dir={lp.sample_clamp_direct}, clamp_ind={lp.sample_clamp_indirect}")
 
 
 if __name__ == '__main__':
