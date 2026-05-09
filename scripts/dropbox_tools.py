@@ -35,25 +35,23 @@ def create_dropbox_client(access_token):
     return dropbox.Dropbox(oauth2_access_token=access_token)
 
 def authenticate_and_save_token():
-    """Authenticate with Dropbox and save the resulting access token to
-    TOKEN_FILE.
-    """
-    app_key = os.environ['APP_KEY']
-    app_secret = os.environ['APP_SECRET']
-    auth_flow = DropboxOAuth2FlowNoRedirect(app_key, app_secret)
-    authorization_url = auth_flow.start()
+    """Authenticate with Dropbox and save the resulting access token to TOKEN_FILE."""
+    APP_KEY = os.environ['APP_KEY']
+    APP_SECRET = os.environ['APP_SECRET']
+    auth_flow = DropboxOAuth2FlowNoRedirect(APP_KEY, APP_SECRET)
+    authorize_url = auth_flow.start()
 
-    print(f"1. Go to: {authorization_url}")
+    print("1. Go to: " + authorize_url)
     print("2. Click \"Allow\" (you might have to log in first).")
     print("3. Copy the authorization code.")
-    authorization_code = input("Enter the authorization code here: ").strip()
+    auth_code = input("Enter the authorization code here: ").strip()
 
-    oauth_result = auth_flow.finish(authorization_code)
+    oauth_result = auth_flow.finish(auth_code)
     access_token = oauth_result.access_token
 
     with open(TOKEN_FILE, 'w') as file:
         file.write(access_token)
-    
+
     return access_token
 
 def connect_to_dropbox():
@@ -76,27 +74,6 @@ def connect_to_dropbox():
     return dbx
 
 
-def authenticate_and_save_token():
-    """Authenticate with Dropbox and save the resulting access token to
-    TOKEN_FILE.
-    """
-    APP_KEY = os.environ['APP_KEY']
-    APP_SECRET = os.environ['APP_SECRET']
-    auth_flow = DropboxOAuth2FlowNoRedirect(APP_KEY, APP_SECRET)
-    authorize_url = auth_flow.start()
-
-    print("1. Go to: " + authorize_url)
-    print("2. Click \"Allow\" (you might have to log in first).")
-    print("3. Copy the authorization code.")
-    auth_code = input("Enter the authorization code here: ").strip()
-
-    oauth_result = auth_flow.finish(auth_code)
-    access_token = oauth_result.access_token
-
-    with open(TOKEN_FILE, 'w') as file:
-        file.write(access_token)
-
-    return access_token
 
 def list_files():
     """List files in the Dropbox folder specified by the DROPBOX_FOLDER_PATH
@@ -188,109 +165,146 @@ async def download_file_chunked(index):
         except Exception as err:
             print(f"An error occurred: {err}")
 
-async def upload_chunk_worker(DROPBOX_ACCESS_TOKEN, session, session_id, task_queue, results):
-    """
-    A worker that pulls chunks from a queue and uploads them.
-    """
-    while True:
-        try:
-            offset, data, is_last_chunk = await task_queue.get()
-            print(f"Uploading part at offset {offset}")
-            url = "https://content.dropboxapi.com/2/files/upload_session/append_v2"
-            
-            api_arg = {
-                "cursor": {"session_id": session_id, "offset": offset},
-                "close": is_last_chunk
-            }
-            
-            # Use json.dumps to ensure correct JSON formatting
-            headers = {
-                "Authorization": f"Bearer {DROPBOX_ACCESS_TOKEN}",
-                "Content-Type": "application/octet-stream",
-                "Dropbox-API-Arg": json.dumps(api_arg)
-            }
-            
-            async with session.post(url, headers=headers, data=data) as response:
-                response.raise_for_status()
-                results.append((offset, True))
-                print(f"Successfully uploaded part at offset {offset}")
-        except asyncio.QueueEmpty:
-            break
-        except aiohttp.ClientResponseError as e:
-            print(f"Error uploading chunk at offset {offset}: {e.status}, message='{e.message}'")
-            results.append((offset, False, e))
-        except Exception as e:
-            print(f"An unexpected error occurred for chunk at offset {offset}: {e}")
-            results.append((offset, False, e))
-        finally:
-            task_queue.task_done()
+def get_available_ram_bytes():
+    """Return available system RAM in bytes via /proc/meminfo."""
+    try:
+        with open('/proc/meminfo') as f:
+            for line in f:
+                if line.startswith('MemAvailable:'):
+                    return int(line.split()[1]) * 1024
+    except Exception:
+        pass
+    return 8 * 1024 * 1024 * 1024  # 8GB fallback
 
-async def upload_file_chunked(filename):
+
+def calculate_upload_params(file_size):
+    """Derive queue depth and worker count from available RAM.
+
+    Uses 60% of available RAM as the chunk buffer. Worker count is capped at
+    64 since network throughput saturates well before that. Both scale up
+    automatically on high-RAM containers.
     """
-    Uploads a large file to Dropbox in multiple chunks concurrently.
+    available = get_available_ram_bytes()
+    buffer_budget = int(available * 0.6)
+    max_buffered = max(4, buffer_budget // UPLOAD_CHUNK_SIZE)
+    total_chunks = (file_size + UPLOAD_CHUNK_SIZE - 1) // UPLOAD_CHUNK_SIZE
+    queue_depth = min(max_buffered, total_chunks)
+    workers = min(64, max(8, queue_depth))
+
+    print(f"  Available RAM : {available / 1024**3:.1f} GB")
+    print(f"  Buffer budget : {buffer_budget / 1024**3:.1f} GB "
+          f"({queue_depth} × {UPLOAD_CHUNK_SIZE // 1024**2} MB chunks)")
+    print(f"  Workers       : {workers}  |  Total chunks: {total_chunks}")
+
+    return queue_depth, workers
+
+
+async def _chunk_producer(local_path, file_size, queue):
+    """Read the file sequentially and push chunks into the bounded queue.
+
+    Blocks when the queue is full, keeping only as many chunks in memory
+    as the queue depth allows.
     """
-    dbx = connect_to_dropbox()
-    DROPBOX_ACCESS_TOKEN = dbx._oauth2_access_token    
-    local_path = os.path.join(LOCAL_FOLDER_PATH, filename)
-    file_size = os.path.getsize(local_path)
-    print(f"File size: {file_size}")
-    dropbox_path = os.path.join(DROPBOX_UPLOAD_FOLDER_PATH, filename)
-
-    file_size = os.path.getsize(local_path)
-    if file_size <= UPLOAD_CHUNK_SIZE:
-        print("File size is small enough for a single upload. Using standard upload.")
-        with open(local_path, "rb") as f:
-            dbx.files_upload(f.read(), dropbox_path)
-        print("Standard upload complete.")
-        return
-
-    print(f"Starting concurrent upload session for file: {local_path}")
-    session_start_result = dbx.files_upload_session_start(
-        b'',
-        session_type=dropbox.files.UploadSessionType.concurrent
-    )
-    session_id = session_start_result.session_id
-    print(f"Upload session started with ID: {session_id}")
-
-    task_queue = asyncio.Queue()
     offset = 0
-    with open(local_path, "rb") as f:
+    with open(local_path, 'rb') as f:
         while True:
             data = f.read(UPLOAD_CHUNK_SIZE)
             if not data:
                 break
-            
-            is_last_chunk = (offset + len(data) >= file_size)
-            await task_queue.put((offset, data, is_last_chunk))
+            is_last = (offset + len(data) >= file_size)
+            await queue.put((offset, data, is_last))
             offset += len(data)
 
-    results = []
-    async with aiohttp.ClientSession() as session:
-        workers = [
-            asyncio.create_task(upload_chunk_worker(DROPBOX_ACCESS_TOKEN, session, session_id, task_queue, results))
-            for _ in range(CONCURRENCY_LIMIT)
-        ]
-        await task_queue.join()
-        for worker in workers:
-            worker.cancel()
-        
-        await asyncio.gather(*workers, return_exceptions=True)
 
-    if any(not success for _, success, *err in results):
-        print("One or more chunks failed to upload. Aborting.")
+async def _chunk_uploader(token, session_id, queue, results, pbar):
+    """Pull chunks from the queue and upload to Dropbox."""
+    url = "https://content.dropboxapi.com/2/files/upload_session/append_v2"
+    while True:
+        offset, data, is_last = await queue.get()
+        try:
+            headers = {
+                "Authorization": f"Bearer {token}",
+                "Content-Type": "application/octet-stream",
+                "Dropbox-API-Arg": json.dumps({
+                    "cursor": {"session_id": session_id, "offset": offset},
+                    "close": is_last,
+                }),
+            }
+            async with aiohttp.ClientSession() as http:
+                async with http.post(url, headers=headers, data=data) as response:
+                    response.raise_for_status()
+            results[offset] = True
+            pbar.update(len(data))
+        except Exception as e:
+            results[offset] = e
+            tqdm.write(f"  FAILED offset {offset // 1024**2} MB: {e}")
+        finally:
+            queue.task_done()
+
+
+async def upload_file_chunked(filename):
+    """Upload a file to Dropbox using a concurrent chunked session.
+
+    Queue depth and worker count scale automatically with available RAM so
+    small containers stay within memory limits and large containers saturate
+    the network.
+    """
+    dbx = connect_to_dropbox()
+    token = dbx._oauth2_access_token
+    local_path = os.path.join(LOCAL_FOLDER_PATH, filename)
+    dropbox_path = os.path.join(DROPBOX_UPLOAD_FOLDER_PATH, filename)
+    file_size = os.path.getsize(local_path)
+
+    print(f"Uploading: {local_path}  ({file_size / 1024**3:.2f} GB)")
+
+    if file_size <= UPLOAD_CHUNK_SIZE:
+        print("Small file — using single-request upload.")
+        with open(local_path, 'rb') as f:
+            dbx.files_upload(f.read(), dropbox_path)
+        print("Upload complete.")
         return
 
-    print(f"All chunks uploaded. Finishing upload session...")
+    queue_depth, num_workers = calculate_upload_params(file_size)
+
+    session_id = dbx.files_upload_session_start(
+        b'', session_type=dropbox.files.UploadSessionType.concurrent
+    ).session_id
+    print(f"Session started: {session_id}")
+
+    queue = asyncio.Queue(maxsize=queue_depth)
+    results = {}
+
+    with tqdm(total=file_size, unit='B', unit_scale=True, unit_divisor=1024,
+              desc=filename, dynamic_ncols=True) as pbar:
+        producer = asyncio.create_task(_chunk_producer(local_path, file_size, queue))
+        workers = [
+            asyncio.create_task(_chunk_uploader(token, session_id, queue, results, pbar))
+            for _ in range(num_workers)
+        ]
+
+        await producer
+        await queue.join()
+        for w in workers:
+            w.cancel()
+        await asyncio.gather(*workers, return_exceptions=True)
+
+    failures = {off: err for off, err in results.items() if err is not True}
+    if failures:
+        print(f"Upload failed — {len(failures)} chunk(s) errored:")
+        for off, err in failures.items():
+            print(f"  offset {off // 1024**2} MB: {err}")
+        return
+
+    print("All chunks uploaded — finishing session...")
     try:
-        commit_info = dropbox.files.CommitInfo(path=dropbox_path)
-        cursor = dropbox.files.UploadSessionCursor(session_id=session_id, offset=file_size)
-        
-        dbx.files_upload_session_finish(io.BytesIO(b'').getvalue(), cursor, commit_info)
-        print(f"Successfully uploaded file to {dropbox_path}")
-    except dropbox.exceptions.ApiError as err:
-        print(f"Error finishing upload session: {err}")
+        dbx.files_upload_session_finish(
+            b'',
+            dropbox.files.UploadSessionCursor(session_id=session_id, offset=file_size),
+            dropbox.files.CommitInfo(path=dropbox_path),
+        )
+        print(f"Done: {dropbox_path}")
     except Exception as err:
-        print(f"An error occurred during chunked upload: {err}")
+        print(f"Error finishing session: {err}")
 
 
 async def main():
